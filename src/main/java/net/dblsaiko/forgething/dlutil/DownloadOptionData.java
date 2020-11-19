@@ -5,11 +5,9 @@ import java.nio.file.Path;
 import java.util.List;
 
 public interface DownloadOptionData {
+	URL url();
 
-    URL url();
+	Path targetPath();
 
-    Path targetPath();
-
-    List<DownloadEntry> downloadHistory();
-
+	List<DownloadEntry> downloadHistory();
 }

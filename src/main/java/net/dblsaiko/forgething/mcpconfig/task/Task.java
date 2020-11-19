@@ -7,11 +7,9 @@ import java.util.Map;
 import java.util.Set;
 
 public interface Task {
+	Path execute(Path output, Map<String, Path> prevTaskOutputs) throws IOException;
 
-    Path execute(Path output, Map<String, Path> prevTaskOutputs) throws IOException;
-
-    default Set<String> getDependencies() {
-        return Collections.emptySet();
-    }
-
+	default Set<String> getDependencies() {
+		return Collections.emptySet();
+	}
 }

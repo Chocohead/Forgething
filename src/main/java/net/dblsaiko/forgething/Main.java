@@ -39,7 +39,7 @@ public class Main {
 	public static final Path LOG_FILE = Paths.get("log.txt");
 
 	public static void main(String[] args) {
-		String minecraftVersion = "1.15.2";
+		String minecraftVersion = "1.16.4";
 
 		Path mcpconfig = getMcpConfig(minecraftVersion);
 		try (McpConfig mcpc = McpConfig.from(mcpconfig)) {
