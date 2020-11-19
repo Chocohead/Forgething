@@ -1,13 +1,21 @@
 package net.dblsaiko.forgething.mcpconfig.task;
 
-import com.google.gson.JsonObject;
-import net.dblsaiko.forgething.mcpconfig.ArgTemplate;
-import net.dblsaiko.forgething.mcpconfig.McpConfigHeader;
-
 import java.util.function.Function;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+
+import net.dblsaiko.forgething.mcpconfig.ArgTemplate;
+import net.dblsaiko.forgething.mcpconfig.Side;
+
 public interface TaskType<T extends Task> {
+	interface Context {
+		String getGameVersion();
 
-    T create(String taskName, String pipeline, McpConfigHeader header, JsonObject data, Function<String, ArgTemplate> paramResolver);
+		boolean hasData(String key);
 
+		JsonElement getData(String key);
+	}
+
+	T create(String taskName, Side pipeline, Context context, JsonObject data, Function<String, ArgTemplate> paramResolver);
 }

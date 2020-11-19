@@ -1,125 +1,126 @@
 package net.dblsaiko.forgething.mcpconfig;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-import net.dblsaiko.forgething.FileUtil;
-import net.dblsaiko.forgething.mcpconfig.task.*;
-
 import java.io.Closeable;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.file.*;
+import java.io.Reader;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.function.Function;
+import java.util.Map.Entry;
 import java.util.stream.Collectors;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+
+import net.dblsaiko.forgething.FileUtil;
+import net.dblsaiko.forgething.Main;
+import net.dblsaiko.forgething.Utils;
+import net.dblsaiko.forgething.mcpconfig.task.DownloadClientTask;
+import net.dblsaiko.forgething.mcpconfig.task.DownloadServerTask;
+import net.dblsaiko.forgething.mcpconfig.task.InjectTask;
+import net.dblsaiko.forgething.mcpconfig.task.ListLibrariesTask;
+import net.dblsaiko.forgething.mcpconfig.task.NoopTask;
+import net.dblsaiko.forgething.mcpconfig.task.PatchTask;
+import net.dblsaiko.forgething.mcpconfig.task.StripTask;
+import net.dblsaiko.forgething.mcpconfig.task.TaskType;
+import net.dblsaiko.forgething.mcpconfig.task.TaskType.Context;
+
 public class McpConfig implements Closeable {
+	public static final Path WORK_DIR = Paths.get("work");
 
-    public static final Path WORK_DIR = Paths.get("work");
+	//private final Path mcpConfigFile;
+	private final Path dataDir;
+	private final FileSystem zipfs;
 
-    private final Path mcpConfigFile;
-    private final Path dataDir;
-    private final FileSystem zipfs;
+	//private final Context context;
+	//private final Map<String, TaskType<?>> tasks;
+	private final Map<Side, Pipeline> pipelines;
 
-    private final McpConfigHeader header;
-    private final Map<String, TaskType<?>> tasks;
-    private final Map<String, Pipeline> pipelines;
+	private McpConfig(Path mcpConfigFile,
+			Path dataDir,
+			FileSystem zipfs,
+			Context context,
+			Map<String, TaskType<?>> tasks,
+			Map<Side, Pipeline> pipelines) {
+		//this.mcpConfigFile = mcpConfigFile;
+		this.dataDir = dataDir;
+		this.zipfs = zipfs;
+		//this.context = context;
+		//this.tasks = tasks;
+		this.pipelines = pipelines;
+	}
 
-    private McpConfig(Path mcpConfigFile,
-                      Path dataDir,
-                      FileSystem zipfs,
-                      McpConfigHeader header,
-                      Map<String, TaskType<?>> tasks,
-                      Map<String, Pipeline> pipelines) {
-        this.mcpConfigFile = mcpConfigFile;
-        this.dataDir = dataDir;
-        this.zipfs = zipfs;
-        this.header = header;
-        this.tasks = tasks;
-        this.pipelines = pipelines;
-    }
+	@Override
+	public void close() throws IOException {
+		zipfs.close();
+		FileUtil.deleteDirectories(dataDir);
+	}
 
-    @Override
-    public void close() throws IOException {
-        zipfs.close();
-        FileUtil.deleteDirectories(dataDir);
-    }
+	public static McpConfig from(Path path) {
+		FileSystem zipfs = null;
+		try {
+			zipfs = FileSystems.newFileSystem(path, null);
 
-    public static McpConfig from(Path path) {
-        try {
-            FileSystem zipfs = FileSystems.newFileSystem(path, null);
-            Path config = zipfs.getPath("config.json");
-            try (InputStream is = Files.newInputStream(config)) {
-                JsonObject root = JsonParser.parseReader(new InputStreamReader(is)).getAsJsonObject();
-                Path tempDirectory = Files.createTempDirectory(WORK_DIR, "mcp-config-data");
-                root.add("data", extractFiles(zipfs, tempDirectory, root.getAsJsonObject("data")));
-                McpConfigHeader header = McpConfigHeader.from(root);
-                Map<String, CustomTask.Type> ctc = loadCustomTaskMap(root);
-                Map<String, TaskType<?>> tasks = new HashMap<>(ctc);
-                tasks.put("downloadManifest", NoopTask.Type.INSTANCE);
-                tasks.put("downloadJson", NoopTask.Type.INSTANCE);
-                tasks.put("downloadClient", DownloadClientTask.Type.INSTANCE);
-                tasks.put("downloadServer", DownloadServerTask.Type.INSTANCE);
-                tasks.put("strip", StripTask.Type.INSTANCE);
-                tasks.put("listLibraries", ListLibrariesTask.Type.INSTANCE);
-                tasks.put("inject", InjectTask.Type.INSTANCE);
-                tasks.put("patch", PatchTask.Type.INSTANCE);
-                Map<String, Pipeline> pipelines = loadPipelineMap(root, tasks::get, header);
+			V1Template template;
+			try (Reader in = Files.newBufferedReader(zipfs.getPath("config.json"))) {
+				template = Main.GSON.fromJson(in, V1Template.class);
+			}
 
-                return new McpConfig(path, tempDirectory, zipfs, header, tasks, pipelines);
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-            return null;
-        }
-    }
+			//We only know about V1 so shouldn't really be attempting to process anything else
+			if (template.spec != 1) throw new IllegalStateException("Unexpected MCPConfig spec: " + template.spec);
 
-    private static JsonObject extractFiles(FileSystem zipfs, Path targetDir, JsonObject obj) throws IOException {
-        JsonObject newObject = new JsonObject();
-        for (Map.Entry<String, JsonElement> entry : obj.entrySet()) {
-            String key = entry.getKey();
-            JsonElement value = entry.getValue();
-            if (value.isJsonPrimitive()) {
-                Path path = zipfs.getPath(value.getAsString());
-                if (Files.exists(path)) {
-                    Path newPath = targetDir.resolve(value.getAsString()).toAbsolutePath();
-                    Files.createDirectories(newPath.getParent());
-                    if (Files.notExists(newPath)) {
-                        FileUtil.copyAll(path, newPath);
-                    }
-                    newObject.addProperty(key, newPath.toString());
-                } else {
-                    newObject.add(key, value);
-                }
-            } else if (value.isJsonObject()) {
-                newObject.add(key, extractFiles(zipfs, targetDir, value.getAsJsonObject()));
-            } else {
-                newObject.add(key, value);
-            }
-        }
-        return newObject;
-    }
+			Files.createDirectories(WORK_DIR);
+			Path tempDirectory = Files.createTempDirectory(WORK_DIR, "mcp-config-data");
+			JsonObject data = template.extractData(zipfs, tempDirectory);
 
-    public Pipeline getPipeline(String name) {
-        return pipelines.get(name);
-    }
+			Map<String, TaskType<?>> tasks = new HashMap<>(template.functions);
+			tasks.put("downloadManifest", NoopTask.Type.INSTANCE);
+			tasks.put("downloadJson", NoopTask.Type.INSTANCE);
+			tasks.put("downloadClient", DownloadClientTask.Type.INSTANCE);
+			tasks.put("downloadServer", DownloadServerTask.Type.INSTANCE);
+			tasks.put("strip", StripTask.Type.INSTANCE);
+			tasks.put("listLibraries", ListLibrariesTask.Type.INSTANCE);
+			tasks.put("inject", InjectTask.Type.INSTANCE);
+			tasks.put("patch", PatchTask.Type.INSTANCE);
 
-    public Path execPipeline(String name) throws IOException {
-        return getPipeline(name).exec(Paths.get("work").resolve(name));
-    }
+			Context context = new Context() {
+				@Override
+				public String getGameVersion() {
+					return template.version;
+				}
 
-    private static Map<String, CustomTask.Type> loadCustomTaskMap(JsonObject root) {
-        JsonObject functions = root.getAsJsonObject("functions");
-        return functions.keySet().stream()
-            .collect(Collectors.toMap($ -> $, key -> CustomTask.Type.from(functions.getAsJsonObject(key))));
-    }
+				@Override
+				public boolean hasData(String key) {
+					return data.has(key);
+				}
 
-    private static Map<String, Pipeline> loadPipelineMap(JsonObject root, Function<String, TaskType<?>> taskProvider, McpConfigHeader header) {
-        JsonObject steps = root.getAsJsonObject("steps");
-        return steps.keySet().stream()
-            .collect(Collectors.toMap($ -> $, key -> Pipeline.from(key, steps.getAsJsonArray(key), taskProvider, header)));
-    }
+				@Override
+				public JsonElement getData(String key) {
+					if (!hasData(key)) throw new IllegalArgumentException("Missing data key: ".concat(key));
+					return data.get(key);
+				}
+			};
+			Map<Side, Pipeline> pipelines = template.steps.entrySet().stream()
+					.collect(Collectors.toMap(Entry::getKey, entry -> Pipeline.from(entry.getKey(), entry.getValue(), tasks::get, context)));
+
+			return new McpConfig(path, tempDirectory, zipfs, context, tasks, new EnumMap<>(pipelines));
+		} catch (IOException e) {
+			Utils.closeQuietly(e, zipfs);
+			e.printStackTrace();
+			return null;
+		}
+	}
+
+	public Pipeline getPipeline(Side name) {
+		return pipelines.get(name);
+	}
+
+	public Path execPipeline(Side name) throws IOException {
+		return getPipeline(name).exec(WORK_DIR.resolve(name.getName()));
+	}
 }
