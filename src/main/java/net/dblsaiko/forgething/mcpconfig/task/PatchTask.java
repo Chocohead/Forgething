@@ -5,15 +5,25 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 
 import com.google.gson.JsonObject;
+
+import com.cloudbees.diff.ContextualPatch;
+import com.cloudbees.diff.ContextualPatch.PatchReport;
+import com.cloudbees.diff.HunkReport;
+import com.cloudbees.diff.PatchException;
+import com.cloudbees.diff.PatchFile;
 
 import net.dblsaiko.forgething.FileUtil;
 import net.dblsaiko.forgething.mcpconfig.ArgTemplate;
@@ -36,34 +46,53 @@ public class PatchTask implements Task {
 			FileUtil.copyAll(zipfs.getPath("/"), tmpDir);
 		}
 
-		Files.walk(patchesDir)
-			.filter(p -> !Files.isDirectory(p))
-			.filter(p -> p.toString().endsWith(".patch"))
-			.forEach(path -> patch(path, tmpDir));
+		Files.walkFileTree(patchesDir, new SimpleFileVisitor<Path>() {
+			private final boolean log = false;
 
-		try (FileSystem zipfs = FileSystems.newFileSystem(new URI("jar:file:" + output.toAbsolutePath().toString()), Collections.singletonMap("create", "true"))) {
+			@Override
+			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+				assert !attrs.isDirectory();
+				if (!file.toString().endsWith(".patch")) return FileVisitResult.CONTINUE;
+
+				ContextualPatch patch = ContextualPatch.create(PatchFile.from(file.toFile()), tmpDir.toFile());
+				patch.setCanonialization(true, false); //Allow the access to be wrong but not the whitespacing
+				patch.setMaxFuzz(0);
+
+				List<PatchReport> result;
+				try {
+					if (log) System.out.printf("Patching with %s%n", file);
+					result = patch.patch(false);
+				} catch (PatchException e) {//A sign that the patch itself is invalid
+					throw new IllegalStateException("Patch from " + file + " crashed whilst applying", e);
+				}
+
+				for (PatchReport report : result) {
+					if (report.getStatus().isSuccess()) continue; //This is fine
+
+					System.err.printf("\tPatch failed to apply, %d hunks missed%n", report.hunkReports().size());
+					for (HunkReport hunk : report.hunkReports()) {
+						if (hunk.hasFailed()) {
+							if (hunk.failure != null) {
+								System.err.printf("\tHunk %d crashed: %s%n", hunk.hunkID, hunk.failure);
+							} else {
+								System.err.printf("\tHunk %d missed: %d with %d fuzz%n", hunk.hunkID, hunk.index, hunk.fuzz);
+							}
+						}
+					}
+				}
+
+				return FileVisitResult.CONTINUE;
+			}
+		});
+
+		try (FileSystem zipfs = FileSystems.newFileSystem(new URI("jar:file:" + output.toAbsolutePath()), Collections.singletonMap("create", "true"))) {
 			FileUtil.copyAll(tmpDir, zipfs.getPath("/"));
 		} catch (URISyntaxException e) {
 			throw new RuntimeException(e);
 		}
 
 		FileUtil.deleteDirectories(tmpDir);
-
 		return output;
-	}
-
-	private static boolean patch(Path patchFile, Path dir) {
-		try {
-			return new ProcessBuilder("patch", "-uNtlp1")
-					.redirectError(ProcessBuilder.Redirect.INHERIT)
-					.redirectOutput(ProcessBuilder.Redirect.INHERIT)
-					.redirectInput(patchFile.toFile())
-					.directory(dir.toFile())
-					.start()
-					.waitFor() == 0;
-		} catch (InterruptedException | IOException e) {
-			throw new RuntimeException(e);
-		}
 	}
 
 	@Override

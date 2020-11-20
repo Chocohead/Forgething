@@ -6,3 +6,9 @@
 
 /cache
 /work
+/run
+
+bin/
+.settings/
+.classpath
+.project
