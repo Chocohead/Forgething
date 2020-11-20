@@ -47,7 +47,9 @@ public class Pipeline {
 		for (Step<?> step : steps) {
 			output = workDir.resolve(step.name);
 			output = step.task.execute(output, prevOutputView);
+
 			if (output == null) continue;
+			assert Files.exists(output);
 
 			if (output.startsWith(workDir))
 				output = fixFileName(output);

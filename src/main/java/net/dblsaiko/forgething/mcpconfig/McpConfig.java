@@ -10,9 +10,9 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.stream.Collectors;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -105,10 +105,13 @@ public class McpConfig implements Closeable {
 					return data.get(key);
 				}
 			};
-			Map<Side, Pipeline> pipelines = template.steps.entrySet().stream()
-					.collect(Collectors.toMap(Entry::getKey, entry -> Pipeline.from(entry.getKey(), entry.getValue(), tasks::get, context)));
+			Map<Side, Pipeline> pipelines = new EnumMap<>(Side.class);
 
-			return new McpConfig(path, tempDirectory, zipfs, context, tasks, new EnumMap<>(pipelines));
+			for (Entry<Side, List<JsonObject>> entry : template.steps.entrySet()) {
+				pipelines.put(entry.getKey(), Pipeline.from(entry.getKey(), entry.getValue(), tasks::get, context));
+			}
+
+			return new McpConfig(path, tempDirectory, zipfs, context, tasks, pipelines);
 		} catch (IOException e) {
 			Utils.closeQuietly(e, zipfs);
 			e.printStackTrace();
